@@ -15,11 +15,11 @@ import type { ConsoleEntry, Language, LayoutMode, Project } from './types/projec
 import { CommandPalette, type CommandItem } from './ui/CommandPalette';
 import { ConsolePanel } from './ui/ConsolePanel';
 import { FloatingActions } from './ui/FloatingActions';
-import { OnboardingTour } from './ui/OnboardingTour';
 import { JsReplPanel } from './ui/JsReplPanel';
+import { OnboardingTour } from './ui/OnboardingTour';
 import { SnippetLibrary } from './ui/SnippetLibrary';
 import { ToastCenter, type Toast } from './ui/ToastCenter';
-import { exportSingleHtml, exportZip, importHtml, importZip } from './utils/importExport';
+import { exportCss, exportScript, exportSingleHtml, exportZip, importHtml, importZip } from './utils/importExport';
 
 const fontOptions = [
   'JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace',
@@ -65,6 +65,10 @@ function App() {
   const [previewNonce, setPreviewNonce] = useState(0);
   const [lastPreviewRenderMs, setLastPreviewRenderMs] = useState<number | null>(null);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
+  const [editorPreviewSplit, setEditorPreviewSplit] = usePersistentState('dml:editorPreviewSplit', 50);
+  const [collapsedEditor, setCollapsedEditor] = useState(false);
+  const [collapsedPreview, setCollapsedPreview] = useState(false);
+  const [fullscreenPanel, setFullscreenPanel] = useState<'editor' | 'preview' | null>(null);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<MonacoEditorHandle | null>(null);
@@ -136,7 +140,7 @@ function App() {
     const panel = containerRef.current;
     if (!panel) return;
     gsap.fromTo(panel, { opacity: 0.55 }, { opacity: 1, duration: 0.2, ease: 'power2.out' });
-  }, [layout, isZenMode]);
+  }, [layout, isZenMode, editorPreviewSplit]);
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
@@ -291,10 +295,14 @@ function App() {
     { id: 'layout-preview', label: 'Layout: Preview Only', onExecute: () => setLayout('preview-only') },
     { id: 'new-template', label: 'Create Project from Selected Template', onExecute: createFromTemplate },
     { id: 'open-tour', label: 'Open Onboarding Tour', onExecute: () => setHasSeenTour(false) },
-    { id: 'insert-debounce', label: 'Insert Debounce Snippet', onExecute: () => editorRef.current?.insertText("const debounce = (fn, delay = 200) => { let timer; return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); }; };") },
+    { id: 'insert-debounce', label: 'Insert Debounce Snippet', onExecute: () => editorRef.current?.insertText('const debounce = (fn, delay = 200) => { let timer; return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); }; };') },
   ];
 
   if (!activeProject) return null;
+
+  const showEditor = layout !== 'preview-only' && !collapsedEditor && fullscreenPanel !== 'preview';
+  const showPreview = layout !== 'editor-only' && !collapsedPreview && fullscreenPanel !== 'editor';
+  const sideBySideResize = layout === 'side-by-side' && showEditor && showPreview;
 
   return (
     <div className="flex h-full flex-col bg-bg text-slate-100" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
@@ -311,30 +319,20 @@ function App() {
               <option key={font} value={font}>{font.split(',')[0]}</option>
             ))}
           </select>
-          <input
-            className="w-20 rounded bg-slate-800 px-2 py-1"
-            type="number"
-            min={12}
-            max={24}
-            value={fontSize}
-            onChange={(event) => setFontSize(Math.max(12, Math.min(24, Number(event.target.value) || 14)))}
-          />
+          <input className="w-20 rounded bg-slate-800 px-2 py-1" type="number" min={12} max={24} value={fontSize} onChange={(event) => setFontSize(Math.max(12, Math.min(24, Number(event.target.value) || 14)))} />
           <select className="rounded bg-slate-800 px-2 py-1" value={layout} onChange={(e) => setLayout(e.target.value as LayoutMode)}>
             <option value="side-by-side">Side</option>
             <option value="top-bottom">Top Bottom</option>
             <option value="editor-only">Editor</option>
             <option value="preview-only">Preview</option>
           </select>
-          <button className="rounded bg-slate-800 px-2 py-1" onClick={() => exportSingleHtml(activeProject.files)}>Export HTML</button>
+          <button className="rounded bg-slate-800 px-2 py-1" onClick={() => exportSingleHtml(activeProject.files, useTs ? 'typescript' : 'javascript')}>Export HTML</button>
+          <button className="rounded bg-slate-800 px-2 py-1" onClick={() => exportCss(activeProject.files)}>Export CSS</button>
+          <button className="rounded bg-slate-800 px-2 py-1" onClick={() => exportScript(activeProject.files, useTs ? 'typescript' : 'javascript')}>Export Script</button>
           <button className="rounded bg-slate-800 px-2 py-1" onClick={() => void exportZip(activeProject.files)}>Export ZIP</button>
-          <label className="rounded bg-slate-800 px-2 py-1">
-            Import
-            <input type="file" className="hidden" onChange={onFileImport} accept=".html,.zip" />
-          </label>
+          <label className="rounded bg-slate-800 px-2 py-1">Import<input type="file" className="hidden" onChange={onFileImport} accept=".html,.zip" /></label>
           <select className="rounded bg-slate-800 px-2 py-1" value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)}>
-            {templateLibrary.map((template) => (
-              <option key={template.id} value={template.id}>{template.name}</option>
-            ))}
+            {templateLibrary.map((template) => (<option key={template.id} value={template.id}>{template.name}</option>))}
           </select>
           <button className="rounded bg-cyan-700 px-2 py-1" onClick={createFromTemplate}>New from Template</button>
           {canInstall ? <button className="rounded bg-cyan-700 px-2 py-1" onClick={() => void install()}>Install</button> : null}
@@ -345,38 +343,51 @@ function App() {
       {!isZenMode ? (
         <div className="flex items-center gap-2 border-b border-slate-700 bg-slate-900 px-3 py-2">
           {projects.map((project) => (
-            <button
-              key={project.id}
-              className={`rounded px-3 py-1 text-xs ${project.id === activeProject.id ? 'bg-cyan-700 text-white' : 'bg-slate-800 text-slate-300'}`}
-              onClick={() => setActiveProjectId(project.id)}
-            >
-              {project.name}
-            </button>
+            <button key={project.id} className={`rounded px-3 py-1 text-xs ${project.id === activeProject.id ? 'bg-cyan-700 text-white' : 'bg-slate-800 text-slate-300'}`} onClick={() => setActiveProjectId(project.id)}>{project.name}</button>
           ))}
-          <button className="ml-auto rounded bg-slate-800 px-2 py-1 text-xs" onClick={() => void removeActiveProject()}>Close Active</button>
+          <button className="ml-auto rounded bg-slate-800 px-2 py-1 text-xs" onClick={() => setCollapsedEditor((v) => !v)}>{collapsedEditor ? 'Show Editor' : 'Hide Editor'}</button>
+          <button className="rounded bg-slate-800 px-2 py-1 text-xs" onClick={() => setCollapsedPreview((v) => !v)}>{collapsedPreview ? 'Show Preview' : 'Hide Preview'}</button>
+          <button className="rounded bg-slate-800 px-2 py-1 text-xs" onClick={() => setFullscreenPanel((v) => (v === 'editor' ? null : 'editor'))}>Editor Full</button>
+          <button className="rounded bg-slate-800 px-2 py-1 text-xs" onClick={() => setFullscreenPanel((v) => (v === 'preview' ? null : 'preview'))}>Preview Full</button>
+          <button className="rounded bg-slate-800 px-2 py-1 text-xs" onClick={() => void removeActiveProject()}>Close Active</button>
         </div>
       ) : null}
 
-      <motion.main className={`grid flex-1 gap-2 p-2 ${layoutClass[layout]}`} ref={containerRef}>
-        {layout !== 'preview-only' ? (
+      <motion.main
+        className={`grid flex-1 gap-2 p-2 ${layoutClass[layout]}`}
+        ref={containerRef}
+        style={sideBySideResize ? { gridTemplateColumns: `${editorPreviewSplit}% 6px ${100 - editorPreviewSplit}%` } : undefined}
+      >
+        {showEditor ? (
           <section className="flex min-h-0 flex-col rounded border border-slate-700">
             {!isZenMode ? <EditorTabs active={activeLanguage} onSelect={setActiveLanguage} tsEnabled={useTs} /> : null}
             <div className="min-h-0 flex-1">
-              <MonacoEditorPane
-                ref={editorRef}
-                value={activeCode}
-                language={activeLanguage}
-                onChange={(value) => setFile(activeLanguage, value)}
-                wordWrap={wordWrap}
-                minimap={minimap}
-                fontSize={fontSize}
-                fontFamily={fontFamily}
-              />
+              <MonacoEditorPane ref={editorRef} value={activeCode} language={activeLanguage} onChange={(value) => setFile(activeLanguage, value)} wordWrap={wordWrap} minimap={minimap} fontSize={fontSize} fontFamily={fontFamily} />
             </div>
           </section>
         ) : null}
 
-        {layout !== 'editor-only' ? (
+        {sideBySideResize ? (
+          <div
+            className="hidden cursor-col-resize bg-slate-700 md:block"
+            onMouseDown={(event) => {
+              const startX = event.clientX;
+              const start = editorPreviewSplit;
+              const onMove = (move: MouseEvent) => {
+                const delta = ((move.clientX - startX) / window.innerWidth) * 100;
+                setEditorPreviewSplit(Math.max(20, Math.min(80, start + delta)));
+              };
+              const onUp = () => {
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+              };
+              window.addEventListener('mousemove', onMove);
+              window.addEventListener('mouseup', onUp);
+            }}
+          />
+        ) : null}
+
+        {showPreview ? (
           <section className="min-h-0 rounded border border-slate-700 bg-panel p-2">
             <PreviewPane
               key={previewNonce}
@@ -399,40 +410,35 @@ function App() {
           <div className="flex flex-wrap items-center gap-2 border-t border-slate-700 bg-panel px-3 py-1 text-xs text-slate-300">
             <span>Versions: {entries.length}</span>
             <span>Split: {split}%</span>
+            <span>Editor/Preview: {editorPreviewSplit}%</span>
             <span>Preview: {lastPreviewRenderMs !== null ? `${lastPreviewRenderMs}ms` : 'n/a'}</span>
             <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setIsPaletteOpen(true)}>Command Palette</button>
             <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setHasSeenTour(false)}>Tour</button>
             <select className="rounded bg-slate-800 px-2 py-1" value={restoreHistoryId} onChange={(event) => setRestoreHistoryId(event.target.value)}>
               <option value="">Select snapshot</option>
-              {entries.map((entry) => (
-                <option key={entry.id} value={entry.id}>{new Date(entry.createdAt).toLocaleString()}</option>
-              ))}
+              {entries.map((entry) => (<option key={entry.id} value={entry.id}>{new Date(entry.createdAt).toLocaleString()}</option>))}
             </select>
             <button className="rounded bg-slate-800 px-2 py-1" onClick={() => void restoreHistory()}>Restore</button>
           </div>
-          <div
-            className="h-1 cursor-row-resize bg-slate-700"
-            onMouseDown={(event) => {
-              const startY = event.clientY;
-              const start = split;
-              const onMove = (move: MouseEvent) => {
-                const delta = ((move.clientY - startY) / window.innerHeight) * 100;
-                setSplit(Math.max(20, Math.min(80, start + delta)));
-              };
-              const onUp = () => {
-                window.removeEventListener('mousemove', onMove);
-                window.removeEventListener('mouseup', onUp);
-              };
-              window.addEventListener('mousemove', onMove);
-              window.addEventListener('mouseup', onUp);
-            }}
-          />
+          <div className="h-1 cursor-row-resize bg-slate-700" onMouseDown={(event) => {
+            const startY = event.clientY;
+            const start = split;
+            const onMove = (move: MouseEvent) => {
+              const delta = ((move.clientY - startY) / window.innerHeight) * 100;
+              setSplit(Math.max(20, Math.min(80, start + delta)));
+            };
+            const onUp = () => {
+              window.removeEventListener('mousemove', onMove);
+              window.removeEventListener('mouseup', onUp);
+            };
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onUp);
+          }} />
           <div style={{ height: `${100 - split}%` }}>
             <ConsolePanel logs={consoleLogs} onClear={() => setConsoleLogs([])} />
           </div>
         </>
       ) : null}
-
 
       {!isZenMode ? (
         <div className="grid gap-2 border-t border-slate-700 bg-panel px-3 py-2 md:grid-cols-2">
@@ -441,29 +447,15 @@ function App() {
             onLog={(message) => {
               setConsoleLogs((prev) => [
                 ...prev,
-                {
-                  id: crypto.randomUUID(),
-                  level: 'log',
-                  message,
-                  timestamp: Date.now(),
-                },
+                { id: crypto.randomUUID(), level: 'log', message, timestamp: Date.now() },
               ]);
             }}
           />
         </div>
       ) : null}
-      <FloatingActions
-        onRun={() => appBus.emit('run', undefined)}
-        onSave={() => appBus.emit('save', undefined)}
-        onSettings={() => setIsPaletteOpen(true)}
-      />
+      <FloatingActions onRun={() => appBus.emit('run', undefined)} onSave={() => appBus.emit('save', undefined)} onSettings={() => setIsPaletteOpen(true)} />
       <CommandPalette isOpen={isPaletteOpen} onClose={() => setIsPaletteOpen(false)} commands={commands} />
-      <OnboardingTour
-        isOpen={!hasSeenTour}
-        onClose={() => {
-          setHasSeenTour(true);
-        }}
-      />
+      <OnboardingTour isOpen={!hasSeenTour} onClose={() => { setHasSeenTour(true); }} />
       <ToastCenter toasts={toasts} />
     </div>
   );
