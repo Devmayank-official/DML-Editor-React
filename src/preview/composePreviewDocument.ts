@@ -1,6 +1,7 @@
 import ts from 'typescript';
 import { previewCsp } from '../security/csp';
-import type { ProjectFiles } from '../types/project';
+import type { ProjectFiles, StylePreprocessor } from '../types/project';
+import { compileStyles } from '../utils/styleCompiler';
 
 const transpileRuntime = (files: ProjectFiles, useTs: boolean): string => {
   if (!useTs) return files.javascript;
@@ -23,8 +24,14 @@ const transpileRuntime = (files: ProjectFiles, useTs: boolean): string => {
   return result.outputText;
 };
 
-export const composePreviewDocument = (files: ProjectFiles, useTailwind: boolean, useTs: boolean): string => {
+export const composePreviewDocument = async (
+  files: ProjectFiles,
+  useTailwind: boolean,
+  useTs: boolean,
+  stylePreprocessor: StylePreprocessor,
+): Promise<string> => {
   const runtime = transpileRuntime(files, useTs);
+  const { css, error } = await compileStyles(files.css, stylePreprocessor);
 
   return `<!doctype html>
 <html>
@@ -32,7 +39,7 @@ export const composePreviewDocument = (files: ProjectFiles, useTailwind: boolean
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="${previewCsp}" />
 ${useTailwind ? '<script src="https://cdn.tailwindcss.com"></script>' : ''}
-<style>${files.css}</style>
+<style>${css}</style>
 </head>
 <body>
 ${files.html}
@@ -46,6 +53,7 @@ const send = (level, payload) => parent.postMessage({ source: 'dml-preview', lev
   };
 });
 window.addEventListener('error', (event) => send('error', { message: event.message, stack: event.error?.stack }));
+${error ? `send('error', { message: ${JSON.stringify(`[${stylePreprocessor.toUpperCase()}] ${error}`)} });` : ''}
 </script>
 <script>${runtime}</script>
 </body>

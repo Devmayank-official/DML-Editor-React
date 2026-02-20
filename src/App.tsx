@@ -11,7 +11,7 @@ import { useInstallPrompt } from './pwa/useInstallPrompt';
 import { deleteProject, listProjects, saveProject } from './storage/projectStore';
 import { defaultTemplate } from './templates/defaultTemplate';
 import { templateLibrary } from './templates/library';
-import type { ConsoleEntry, Language, LayoutMode, Project } from './types/project';
+import type { ConsoleEntry, Language, LayoutMode, Project, StylePreprocessor } from './types/project';
 import { CommandPalette, type CommandItem } from './ui/CommandPalette';
 import { ConsolePanel } from './ui/ConsolePanel';
 import { FloatingActions } from './ui/FloatingActions';
@@ -71,6 +71,7 @@ function App() {
   const [layout, setLayout] = usePersistentState<LayoutMode>('dml:layout', 'side-by-side');
   const [useTailwind, setUseTailwind] = usePersistentState('dml:tailwind', true);
   const [useTs, setUseTs] = usePersistentState('dml:typescript', false);
+  const [stylePreprocessor, setStylePreprocessor] = usePersistentState<StylePreprocessor>('dml:stylePreprocessor', 'css');
   const [wordWrap, setWordWrap] = usePersistentState('dml:wordWrap', true);
   const [minimap, setMinimap] = usePersistentState('dml:minimap', false);
   const [fontFamily, setFontFamily] = usePersistentState<(typeof fontOptions)[number]>('dml:fontFamily', fontOptions[0]);
@@ -412,6 +413,11 @@ function App() {
           <h1 className="mr-3 font-semibold tracking-wide text-accent">DML Editor</h1>
           <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setUseTailwind((v) => !v)}>Tailwind</button>
           <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setUseTs((v) => !v)}>TypeScript</button>
+          <select className="rounded bg-slate-800 px-2 py-1" value={stylePreprocessor} onChange={(event) => setStylePreprocessor(event.target.value as StylePreprocessor)}>
+            <option value="css">CSS</option>
+            <option value="scss">SCSS</option>
+            <option value="less">LESS</option>
+          </select>
           <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setWordWrap((v) => !v)}>Word Wrap</button>
           <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setMinimap((v) => !v)}>Minimap</button>
           <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setIsZenMode((value) => !value)}>Zen</button>
@@ -534,6 +540,7 @@ function App() {
               files={activeProject.files}
               useTailwind={useTailwind}
               useTs={useTs}
+              stylePreprocessor={stylePreprocessor}
               onLoad={() => {
                 if (previewRunStartedAt.current !== null) {
                   setLastPreviewRenderMs(Math.round(performance.now() - previewRunStartedAt.current));

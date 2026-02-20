@@ -1,16 +1,28 @@
-import { useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import { composePreviewDocument } from './composePreviewDocument';
-import type { ProjectFiles } from '../types/project';
+import type { ProjectFiles, StylePreprocessor } from '../types/project';
 
 interface PreviewPaneProps {
   files: ProjectFiles;
   useTailwind: boolean;
   useTs: boolean;
+  stylePreprocessor: StylePreprocessor;
   onLoad?: () => void;
 }
 
-export const PreviewPane = ({ files, useTailwind, useTs, onLoad }: PreviewPaneProps) => {
-  const srcDoc = useMemo(() => composePreviewDocument(files, useTailwind, useTs), [files, useTailwind, useTs]);
+export const PreviewPane = ({ files, useTailwind, useTs, stylePreprocessor, onLoad }: PreviewPaneProps) => {
+  const [srcDoc, setSrcDoc] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    void composePreviewDocument(files, useTailwind, useTs, stylePreprocessor).then((document) => {
+      if (!active) return;
+      setSrcDoc(document);
+    });
+    return () => {
+      active = false;
+    };
+  }, [files, stylePreprocessor, useTailwind, useTs]);
 
   return (
     <iframe

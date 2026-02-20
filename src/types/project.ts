@@ -24,3 +24,5 @@ export interface ConsoleEntry {
 }
 
 export type LayoutMode = 'side-by-side' | 'top-bottom' | 'editor-only' | 'preview-only';
+
+export type StylePreprocessor = 'css' | 'scss' | 'less';
