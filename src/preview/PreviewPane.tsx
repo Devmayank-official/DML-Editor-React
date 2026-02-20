@@ -6,9 +6,10 @@ interface PreviewPaneProps {
   files: ProjectFiles;
   useTailwind: boolean;
   useTs: boolean;
+  onLoad?: () => void;
 }
 
-export const PreviewPane = ({ files, useTailwind, useTs }: PreviewPaneProps) => {
+export const PreviewPane = ({ files, useTailwind, useTs, onLoad }: PreviewPaneProps) => {
   const srcDoc = useMemo(() => composePreviewDocument(files, useTailwind, useTs), [files, useTailwind, useTs]);
 
   return (
@@ -18,6 +19,7 @@ export const PreviewPane = ({ files, useTailwind, useTs }: PreviewPaneProps) => 
       srcDoc={srcDoc}
       className="h-full w-full rounded-md border border-slate-700 bg-white"
       referrerPolicy="no-referrer"
+      onLoad={onLoad}
     />
   );
 };

@@ -16,6 +16,8 @@ import { CommandPalette, type CommandItem } from './ui/CommandPalette';
 import { ConsolePanel } from './ui/ConsolePanel';
 import { FloatingActions } from './ui/FloatingActions';
 import { OnboardingTour } from './ui/OnboardingTour';
+import { JsReplPanel } from './ui/JsReplPanel';
+import { SnippetLibrary } from './ui/SnippetLibrary';
 import { ToastCenter, type Toast } from './ui/ToastCenter';
 import { exportSingleHtml, exportZip, importHtml, importZip } from './utils/importExport';
 
@@ -61,10 +63,12 @@ function App() {
   const [restoreHistoryId, setRestoreHistoryId] = useState('');
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [previewNonce, setPreviewNonce] = useState(0);
+  const [lastPreviewRenderMs, setLastPreviewRenderMs] = useState<number | null>(null);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<MonacoEditorHandle | null>(null);
+  const previewRunStartedAt = useRef<number | null>(null);
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? projects[0],
@@ -165,6 +169,7 @@ function App() {
       pushToast('Format command dispatched');
     });
     const unsubscribeRun = appBus.on('run', () => {
+      previewRunStartedAt.current = performance.now();
       setPreviewNonce((prev) => prev + 1);
       pushToast('Preview refreshed');
     });
@@ -286,6 +291,7 @@ function App() {
     { id: 'layout-preview', label: 'Layout: Preview Only', onExecute: () => setLayout('preview-only') },
     { id: 'new-template', label: 'Create Project from Selected Template', onExecute: createFromTemplate },
     { id: 'open-tour', label: 'Open Onboarding Tour', onExecute: () => setHasSeenTour(false) },
+    { id: 'insert-debounce', label: 'Insert Debounce Snippet', onExecute: () => editorRef.current?.insertText("const debounce = (fn, delay = 200) => { let timer; return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); }; };") },
   ];
 
   if (!activeProject) return null;
@@ -372,7 +378,18 @@ function App() {
 
         {layout !== 'editor-only' ? (
           <section className="min-h-0 rounded border border-slate-700 bg-panel p-2">
-            <PreviewPane key={previewNonce} files={activeProject.files} useTailwind={useTailwind} useTs={useTs} />
+            <PreviewPane
+              key={previewNonce}
+              files={activeProject.files}
+              useTailwind={useTailwind}
+              useTs={useTs}
+              onLoad={() => {
+                if (previewRunStartedAt.current !== null) {
+                  setLastPreviewRenderMs(Math.round(performance.now() - previewRunStartedAt.current));
+                  previewRunStartedAt.current = null;
+                }
+              }}
+            />
           </section>
         ) : null}
       </motion.main>
@@ -382,6 +399,7 @@ function App() {
           <div className="flex flex-wrap items-center gap-2 border-t border-slate-700 bg-panel px-3 py-1 text-xs text-slate-300">
             <span>Versions: {entries.length}</span>
             <span>Split: {split}%</span>
+            <span>Preview: {lastPreviewRenderMs !== null ? `${lastPreviewRenderMs}ms` : 'n/a'}</span>
             <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setIsPaletteOpen(true)}>Command Palette</button>
             <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setHasSeenTour(false)}>Tour</button>
             <select className="rounded bg-slate-800 px-2 py-1" value={restoreHistoryId} onChange={(event) => setRestoreHistoryId(event.target.value)}>
@@ -415,6 +433,25 @@ function App() {
         </>
       ) : null}
 
+
+      {!isZenMode ? (
+        <div className="grid gap-2 border-t border-slate-700 bg-panel px-3 py-2 md:grid-cols-2">
+          <SnippetLibrary onInsert={(code) => editorRef.current?.insertText(code)} />
+          <JsReplPanel
+            onLog={(message) => {
+              setConsoleLogs((prev) => [
+                ...prev,
+                {
+                  id: crypto.randomUUID(),
+                  level: 'log',
+                  message,
+                  timestamp: Date.now(),
+                },
+              ]);
+            }}
+          />
+        </div>
+      ) : null}
       <FloatingActions
         onRun={() => appBus.emit('run', undefined)}
         onSave={() => appBus.emit('save', undefined)}

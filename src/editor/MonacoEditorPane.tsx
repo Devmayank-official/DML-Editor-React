@@ -14,6 +14,7 @@ interface MonacoEditorPaneProps {
 export interface MonacoEditorHandle {
   toggleComment: () => void;
   formatDocument: () => void;
+  insertText: (text: string) => void;
 }
 
 export const MonacoEditorPane = forwardRef<MonacoEditorHandle, MonacoEditorPaneProps>(
@@ -27,6 +28,14 @@ export const MonacoEditorPane = forwardRef<MonacoEditorHandle, MonacoEditorPaneP
       },
       formatDocument: () => {
         editorRef.current?.trigger('dml', 'editor.action.formatDocument', undefined);
+      },
+      insertText: (text: string) => {
+        const editor = editorRef.current;
+        if (!editor) return;
+        const selection = editor.getSelection();
+        if (!selection) return;
+        editor.executeEdits('dml', [{ range: selection, text, forceMoveMarkers: true }]);
+        editor.focus();
       },
     }));
 
