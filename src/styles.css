@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --dml-bg: 10 15 26;
+  --dml-panel: 19 26 43;
+  --dml-accent: 94 234 212;
+  --dml-text: 226 232 240;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  color: rgb(var(--dml-text));
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 #0a0f1a;
+}
+
+button {
+  @apply transition-colors;
+}
