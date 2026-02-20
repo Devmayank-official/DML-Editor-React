@@ -17,6 +17,41 @@ export interface MonacoEditorHandle {
   insertText: (text: string) => void;
 }
 
+const setRuntimeMarkers = (
+  model: monaco.editor.ITextModel,
+  language: MonacoEditorPaneProps['language'],
+  source: string,
+): void => {
+  if (language !== 'javascript' && language !== 'typescript') {
+    monaco.editor.setModelMarkers(model, 'runtime-lint', []);
+    return;
+  }
+
+  try {
+    if (language === 'typescript') {
+      new Function(`"use strict"; (async () => { ${source}\n})();`)();
+    } else {
+      new Function(`"use strict"; ${source}`)();
+    }
+    monaco.editor.setModelMarkers(model, 'runtime-lint', []);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Syntax error';
+    const lineMatch = /<anonymous>:(\d+):(\d+)/.exec(String(error));
+    const line = lineMatch ? Math.max(1, Number(lineMatch[1]) - 1) : 1;
+    const col = lineMatch ? Math.max(1, Number(lineMatch[2])) : 1;
+    monaco.editor.setModelMarkers(model, 'runtime-lint', [
+      {
+        message,
+        severity: monaco.MarkerSeverity.Error,
+        startLineNumber: line,
+        startColumn: col,
+        endLineNumber: line,
+        endColumn: col + 1,
+      },
+    ]);
+  }
+};
+
 export const MonacoEditorPane = forwardRef<MonacoEditorHandle, MonacoEditorPaneProps>(
   ({ value, language, onChange, wordWrap, minimap, fontSize, fontFamily }, ref) => {
     const hostRef = useRef<HTMLDivElement | null>(null);
@@ -66,7 +101,10 @@ export const MonacoEditorPane = forwardRef<MonacoEditorHandle, MonacoEditorPaneP
     useEffect(() => {
       const editor = editorRef.current;
       if (!editor) return;
-      monaco.editor.setModelLanguage(editor.getModel()!, language);
+      const model = editor.getModel();
+      if (!model) return;
+      monaco.editor.setModelLanguage(model, language);
+      setRuntimeMarkers(model, language, model.getValue());
     }, [language]);
 
     useEffect(() => {
@@ -75,7 +113,10 @@ export const MonacoEditorPane = forwardRef<MonacoEditorHandle, MonacoEditorPaneP
       if (editor.getValue() !== value) {
         editor.setValue(value);
       }
-    }, [value]);
+      const model = editor.getModel();
+      if (!model) return;
+      setRuntimeMarkers(model, language, editor.getValue());
+    }, [value, language]);
 
     useEffect(() => {
       editorRef.current?.updateOptions({

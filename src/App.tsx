@@ -20,6 +20,7 @@ import { OnboardingTour } from './ui/OnboardingTour';
 import { SnippetLibrary } from './ui/SnippetLibrary';
 import { ToastCenter, type Toast } from './ui/ToastCenter';
 import { exportCss, exportScript, exportSingleHtml, exportZip, importHtml, importZip } from './utils/importExport';
+import { formatWithPrettier } from './utils/formatter';
 
 const fontOptions = [
   'JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace',
@@ -169,8 +170,22 @@ function App() {
       pushToast('Project saved');
     });
     const unsubscribeFormat = appBus.on('format', () => {
-      editorRef.current?.formatDocument();
-      pushToast('Format command dispatched');
+      if (!activeProject) return;
+      const source = activeProject.files[activeLanguage];
+      void formatWithPrettier(source, activeLanguage).then((formatted) => {
+        if (formatted === source) {
+          pushToast('Formatting unchanged');
+          return;
+        }
+        const next = {
+          ...activeProject,
+          files: { ...activeProject.files, [activeLanguage]: formatted },
+          updatedAt: Date.now(),
+        };
+        upsertProject(next);
+        void saveProject(next);
+        pushToast('Formatted with Prettier');
+      });
     });
     const unsubscribeRun = appBus.on('run', () => {
       previewRunStartedAt.current = performance.now();
@@ -182,7 +197,7 @@ function App() {
       unsubscribeFormat();
       unsubscribeRun();
     };
-  }, [activeProject, pushToast, upsertProject]);
+  }, [activeProject, activeLanguage, pushToast, upsertProject]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -290,6 +305,7 @@ function App() {
   const commands: CommandItem[] = [
     { id: 'save', label: 'Save Project', onExecute: () => appBus.emit('save', undefined) },
     { id: 'run', label: 'Run Preview', onExecute: () => appBus.emit('run', undefined) },
+    { id: 'format', label: 'Format Active File (Prettier)', onExecute: () => appBus.emit('format', undefined) },
     { id: 'toggle-zen', label: isZenMode ? 'Disable Zen Mode' : 'Enable Zen Mode', onExecute: () => setIsZenMode((value) => !value) },
     { id: 'layout-side', label: 'Layout: Side by Side', onExecute: () => setLayout('side-by-side') },
     { id: 'layout-preview', label: 'Layout: Preview Only', onExecute: () => setLayout('preview-only') },
