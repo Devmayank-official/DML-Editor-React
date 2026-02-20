@@ -1,21 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type TouchEvent } from 'react';
 import { motion } from 'framer-motion';
 import gsap from 'gsap';
 import { appBus } from './core/eventBus';
+import { usePersistentState } from './core/usePersistentState';
 import { EditorTabs } from './editor/EditorTabs';
 import { MonacoEditorPane, type MonacoEditorHandle } from './editor/MonacoEditorPane';
 import { useVersionHistory } from './history/useVersionHistory';
 import { PreviewPane } from './preview/PreviewPane';
 import { useInstallPrompt } from './pwa/useInstallPrompt';
+import { deleteProject, listProjects, saveProject } from './storage/projectStore';
 import { defaultTemplate } from './templates/defaultTemplate';
 import { templateLibrary } from './templates/library';
 import type { ConsoleEntry, Language, LayoutMode, Project } from './types/project';
 import { CommandPalette, type CommandItem } from './ui/CommandPalette';
 import { ConsolePanel } from './ui/ConsolePanel';
 import { FloatingActions } from './ui/FloatingActions';
+import { OnboardingTour } from './ui/OnboardingTour';
 import { ToastCenter, type Toast } from './ui/ToastCenter';
 import { exportSingleHtml, exportZip, importHtml, importZip } from './utils/importExport';
-import { deleteProject, listProjects, saveProject } from './storage/projectStore';
 
 const fontOptions = [
   'JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace',
@@ -42,21 +44,24 @@ function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string>('');
   const [activeLanguage, setActiveLanguage] = useState<Language>('html');
-  const [layout, setLayout] = useState<LayoutMode>('side-by-side');
-  const [useTailwind, setUseTailwind] = useState(true);
-  const [useTs, setUseTs] = useState(false);
-  const [wordWrap, setWordWrap] = useState(true);
-  const [minimap, setMinimap] = useState(false);
+  const [layout, setLayout] = usePersistentState<LayoutMode>('dml:layout', 'side-by-side');
+  const [useTailwind, setUseTailwind] = usePersistentState('dml:tailwind', true);
+  const [useTs, setUseTs] = usePersistentState('dml:typescript', false);
+  const [wordWrap, setWordWrap] = usePersistentState('dml:wordWrap', true);
+  const [minimap, setMinimap] = usePersistentState('dml:minimap', false);
+  const [fontFamily, setFontFamily] = usePersistentState<(typeof fontOptions)[number]>('dml:fontFamily', fontOptions[0]);
+  const [fontSize, setFontSize] = usePersistentState('dml:fontSize', 14);
+  const [isZenMode, setIsZenMode] = usePersistentState('dml:zenMode', false);
+  const [hasSeenTour, setHasSeenTour] = usePersistentState('dml:tourSeen', false);
+
   const [consoleLogs, setConsoleLogs] = useState<ConsoleEntry[]>([]);
   const [split, setSplit] = useState(50);
   const [selectedTemplate, setSelectedTemplate] = useState(templateLibrary[0].id);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [restoreHistoryId, setRestoreHistoryId] = useState('');
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
-  const [fontFamily, setFontFamily] = useState<(typeof fontOptions)[number]>(fontOptions[0]);
-  const [fontSize, setFontSize] = useState(14);
-  const [isZenMode, setIsZenMode] = useState(false);
   const [previewNonce, setPreviewNonce] = useState(0);
+  const [touchStartX, setTouchStartX] = useState<number | null>(null);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<MonacoEditorHandle | null>(null);
@@ -192,6 +197,9 @@ function App() {
         event.preventDefault();
         setIsPaletteOpen(true);
       }
+      if (event.key === 'Escape') {
+        setIsPaletteOpen(false);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -249,6 +257,27 @@ function App() {
     pushToast('Restored snapshot');
   };
 
+  const swipeLanguages: Language[] = useTs ? ['html', 'css', 'typescript'] : ['html', 'css', 'javascript'];
+
+  const onTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    setTouchStartX(event.touches[0]?.clientX ?? null);
+  };
+
+  const onTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    if (touchStartX === null) return;
+    const end = event.changedTouches[0]?.clientX ?? touchStartX;
+    const delta = end - touchStartX;
+    if (Math.abs(delta) < 45) return;
+    const index = swipeLanguages.indexOf(activeLanguage);
+    if (delta < 0 && index < swipeLanguages.length - 1) {
+      setActiveLanguage(swipeLanguages[index + 1]);
+    }
+    if (delta > 0 && index > 0) {
+      setActiveLanguage(swipeLanguages[index - 1]);
+    }
+    setTouchStartX(null);
+  };
+
   const commands: CommandItem[] = [
     { id: 'save', label: 'Save Project', onExecute: () => appBus.emit('save', undefined) },
     { id: 'run', label: 'Run Preview', onExecute: () => appBus.emit('run', undefined) },
@@ -256,12 +285,13 @@ function App() {
     { id: 'layout-side', label: 'Layout: Side by Side', onExecute: () => setLayout('side-by-side') },
     { id: 'layout-preview', label: 'Layout: Preview Only', onExecute: () => setLayout('preview-only') },
     { id: 'new-template', label: 'Create Project from Selected Template', onExecute: createFromTemplate },
+    { id: 'open-tour', label: 'Open Onboarding Tour', onExecute: () => setHasSeenTour(false) },
   ];
 
   if (!activeProject) return null;
 
   return (
-    <div className="flex h-full flex-col bg-bg text-slate-100">
+    <div className="flex h-full flex-col bg-bg text-slate-100" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
       {!isZenMode ? (
         <header className="flex flex-wrap items-center gap-2 border-b border-slate-700 bg-panel px-3 py-2 text-sm">
           <h1 className="mr-3 font-semibold tracking-wide text-accent">DML Editor</h1>
@@ -353,6 +383,7 @@ function App() {
             <span>Versions: {entries.length}</span>
             <span>Split: {split}%</span>
             <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setIsPaletteOpen(true)}>Command Palette</button>
+            <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setHasSeenTour(false)}>Tour</button>
             <select className="rounded bg-slate-800 px-2 py-1" value={restoreHistoryId} onChange={(event) => setRestoreHistoryId(event.target.value)}>
               <option value="">Select snapshot</option>
               {entries.map((entry) => (
@@ -390,6 +421,12 @@ function App() {
         onSettings={() => setIsPaletteOpen(true)}
       />
       <CommandPalette isOpen={isPaletteOpen} onClose={() => setIsPaletteOpen(false)} commands={commands} />
+      <OnboardingTour
+        isOpen={!hasSeenTour}
+        onClose={() => {
+          setHasSeenTour(true);
+        }}
+      />
       <ToastCenter toasts={toasts} />
     </div>
   );
