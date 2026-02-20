@@ -16,9 +16,11 @@ import { CommandPalette, type CommandItem } from './ui/CommandPalette';
 import { ConsolePanel } from './ui/ConsolePanel';
 import { FloatingActions } from './ui/FloatingActions';
 import { JsReplPanel } from './ui/JsReplPanel';
+import { MarkdownPreviewPanel } from './ui/MarkdownPreviewPanel';
 import { MobileKeyboardToolbar } from './ui/MobileKeyboardToolbar';
 import { OnboardingTour } from './ui/OnboardingTour';
 import { SnippetLibrary } from './ui/SnippetLibrary';
+import { EsmImportPanel } from './ui/EsmImportPanel';
 import { ThemeBuilder, type ThemeSettings } from './ui/ThemeBuilder';
 import { ToastCenter, type Toast } from './ui/ToastCenter';
 import { exportCss, exportScript, exportSingleHtml, exportZip, importHtml, importZip } from './utils/importExport';
@@ -79,6 +81,7 @@ function App() {
   const [isZenMode, setIsZenMode] = usePersistentState('dml:zenMode', false);
   const [hasSeenTour, setHasSeenTour] = usePersistentState('dml:tourSeen', false);
   const [themeSettings, setThemeSettings] = usePersistentState<ThemeSettings>('dml:theme', defaultThemeSettings);
+  const [markdownSource, setMarkdownSource] = usePersistentState('dml:markdown', '# Project Notes\n- Add architecture docs\n- Track refactor ideas');
 
   const [consoleLogs, setConsoleLogs] = useState<ConsoleEntry[]>([]);
   const [split, setSplit] = useState(50);
@@ -343,6 +346,7 @@ function App() {
     { id: 'new-template', label: 'Create Project from Selected Template', onExecute: createFromTemplate },
     { id: 'open-tour', label: 'Open Onboarding Tour', onExecute: () => setHasSeenTour(false) },
     { id: 'open-theme-builder', label: 'Open Theme Builder', onExecute: () => setIsThemeBuilderOpen(true) },
+    { id: 'insert-esm-import-lodash', label: 'Insert esm.sh import (lodash-es)', onExecute: () => editorRef.current?.insertText("import lodash from 'https://esm.sh/lodash-es';\n") },
     {
       id: 'expand-emmet',
       label: 'Expand Emmet Abbreviation',
@@ -589,16 +593,20 @@ function App() {
       ) : null}
 
       {!isZenMode ? (
-        <div className="grid gap-2 border-t border-slate-700 bg-panel px-3 py-2 md:grid-cols-2">
-          <SnippetLibrary onInsert={(code) => editorRef.current?.insertText(code)} />
-          <JsReplPanel
-            onLog={(message) => {
-              setConsoleLogs((prev) => [
-                ...prev,
-                { id: crypto.randomUUID(), level: 'log', message, timestamp: Date.now() },
-              ]);
-            }}
-          />
+        <div className="grid gap-2 border-t border-slate-700 bg-panel px-3 py-2">
+          <div className="grid gap-2 md:grid-cols-2">
+            <SnippetLibrary onInsert={(code) => editorRef.current?.insertText(code)} />
+            <JsReplPanel
+              onLog={(message) => {
+                setConsoleLogs((prev) => [
+                  ...prev,
+                  { id: crypto.randomUUID(), level: 'log', message, timestamp: Date.now() },
+                ]);
+              }}
+            />
+          </div>
+          <EsmImportPanel onInsert={(snippet) => editorRef.current?.insertText(snippet)} />
+          <MarkdownPreviewPanel markdown={markdownSource} onChange={setMarkdownSource} />
         </div>
       ) : null}
       <FloatingActions onRun={() => appBus.emit('run', undefined)} onSave={() => appBus.emit('save', undefined)} onSettings={() => setIsPaletteOpen(true)} />

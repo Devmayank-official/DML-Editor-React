@@ -55,7 +55,7 @@ const send = (level, payload) => parent.postMessage({ source: 'dml-preview', lev
 window.addEventListener('error', (event) => send('error', { message: event.message, stack: event.error?.stack }));
 ${error ? `send('error', { message: ${JSON.stringify(`[${stylePreprocessor.toUpperCase()}] ${error}`)} });` : ''}
 </script>
-<script>${runtime}</script>
+<script type="module">${runtime}</script>
 </body>
 </html>`;
 };
