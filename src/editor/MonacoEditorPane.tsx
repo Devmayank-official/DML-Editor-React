@@ -7,6 +7,8 @@ interface MonacoEditorPaneProps {
   onChange: (value: string) => void;
   wordWrap: boolean;
   minimap: boolean;
+  fontSize: number;
+  fontFamily: string;
 }
 
 export interface MonacoEditorHandle {
@@ -15,7 +17,7 @@ export interface MonacoEditorHandle {
 }
 
 export const MonacoEditorPane = forwardRef<MonacoEditorHandle, MonacoEditorPaneProps>(
-  ({ value, language, onChange, wordWrap, minimap }, ref) => {
+  ({ value, language, onChange, wordWrap, minimap, fontSize, fontFamily }, ref) => {
     const hostRef = useRef<HTMLDivElement | null>(null);
     const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
 
@@ -37,8 +39,8 @@ export const MonacoEditorPane = forwardRef<MonacoEditorHandle, MonacoEditorPaneP
         minimap: { enabled: minimap },
         wordWrap: wordWrap ? 'on' : 'off',
         automaticLayout: true,
-        fontSize: 14,
-        fontFamily: 'JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize,
+        fontFamily,
         scrollBeyondLastLine: false,
         lineNumbers: 'on',
       });
@@ -67,8 +69,13 @@ export const MonacoEditorPane = forwardRef<MonacoEditorHandle, MonacoEditorPaneP
     }, [value]);
 
     useEffect(() => {
-      editorRef.current?.updateOptions({ wordWrap: wordWrap ? 'on' : 'off', minimap: { enabled: minimap } });
-    }, [wordWrap, minimap]);
+      editorRef.current?.updateOptions({
+        wordWrap: wordWrap ? 'on' : 'off',
+        minimap: { enabled: minimap },
+        fontSize,
+        fontFamily,
+      });
+    }, [wordWrap, minimap, fontSize, fontFamily]);
 
     return <div ref={hostRef} className="h-full w-full" />;
   },

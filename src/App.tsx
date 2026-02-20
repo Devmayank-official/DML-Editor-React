@@ -10,10 +10,18 @@ import { useInstallPrompt } from './pwa/useInstallPrompt';
 import { defaultTemplate } from './templates/defaultTemplate';
 import { templateLibrary } from './templates/library';
 import type { ConsoleEntry, Language, LayoutMode, Project } from './types/project';
+import { CommandPalette, type CommandItem } from './ui/CommandPalette';
 import { ConsolePanel } from './ui/ConsolePanel';
+import { FloatingActions } from './ui/FloatingActions';
 import { ToastCenter, type Toast } from './ui/ToastCenter';
 import { exportSingleHtml, exportZip, importHtml, importZip } from './utils/importExport';
 import { deleteProject, listProjects, saveProject } from './storage/projectStore';
+
+const fontOptions = [
+  'JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace',
+  'Fira Code, ui-monospace, SFMono-Regular, Menlo, monospace',
+  'monospace',
+] as const;
 
 const createProject = (name = 'DML Project', files = defaultTemplate): Project => ({
   id: crypto.randomUUID(),
@@ -44,6 +52,12 @@ function App() {
   const [selectedTemplate, setSelectedTemplate] = useState(templateLibrary[0].id);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [restoreHistoryId, setRestoreHistoryId] = useState('');
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+  const [fontFamily, setFontFamily] = useState<(typeof fontOptions)[number]>(fontOptions[0]);
+  const [fontSize, setFontSize] = useState(14);
+  const [isZenMode, setIsZenMode] = useState(false);
+  const [previewNonce, setPreviewNonce] = useState(0);
+
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<MonacoEditorHandle | null>(null);
 
@@ -58,15 +72,13 @@ function App() {
   const pushToast = useCallback((message: string, tone: Toast['tone'] = 'info') => {
     const id = crypto.randomUUID();
     setToasts((prev) => [...prev, { id, message, tone }]);
-    window.setTimeout(() => {
-      setToasts((prev) => prev.filter((toast) => toast.id !== id));
-    }, 2500);
+    window.setTimeout(() => setToasts((prev) => prev.filter((toast) => toast.id !== id)), 2500);
   }, []);
 
   const upsertProject = useCallback((project: Project) => {
     setProjects((prev) => {
-      const existing = prev.find((entry) => entry.id === project.id);
-      if (!existing) return [...prev, project];
+      const exists = prev.some((entry) => entry.id === project.id);
+      if (!exists) return [...prev, project];
       return prev.map((entry) => (entry.id === project.id ? project : entry));
     });
   }, []);
@@ -79,25 +91,23 @@ function App() {
         await saveProject(initial);
         setProjects([initial]);
         setActiveProjectId(initial.id);
-        return;
+      } else {
+        setProjects(stored);
+        setActiveProjectId(stored[0].id);
       }
-      setProjects(stored);
-      const params = new URLSearchParams(window.location.search);
-      const share = params.get('share');
-      if (share) {
-        try {
-          const parsed = JSON.parse(decodeURIComponent(escape(atob(share))));
-          const fromShare = createProject('Shared Project', parsed);
-          await saveProject(fromShare);
-          setProjects((prev) => [...stored, fromShare]);
-          setActiveProjectId(fromShare.id);
-          pushToast('Loaded project from shared URL');
-          return;
-        } catch {
-          pushToast('Invalid share URL payload', 'error');
-        }
+
+      const share = new URLSearchParams(window.location.search).get('share');
+      if (!share) return;
+      try {
+        const decoded = JSON.parse(decodeURIComponent(atob(share)));
+        const sharedProject = createProject('Shared Project', decoded);
+        await saveProject(sharedProject);
+        setProjects((prev) => [...prev, sharedProject]);
+        setActiveProjectId(sharedProject.id);
+        pushToast('Loaded project from shared URL');
+      } catch {
+        pushToast('Invalid share URL payload', 'error');
       }
-      setActiveProjectId(stored[0].id);
     };
     void hydrate();
   }, [pushToast]);
@@ -116,8 +126,8 @@ function App() {
   useEffect(() => {
     const panel = containerRef.current;
     if (!panel) return;
-    gsap.fromTo(panel, { opacity: 0.6 }, { opacity: 1, duration: 0.35, ease: 'power2.out' });
-  }, [layout]);
+    gsap.fromTo(panel, { opacity: 0.55 }, { opacity: 1, duration: 0.2, ease: 'power2.out' });
+  }, [layout, isZenMode]);
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
@@ -149,9 +159,14 @@ function App() {
       editorRef.current?.formatDocument();
       pushToast('Format command dispatched');
     });
+    const unsubscribeRun = appBus.on('run', () => {
+      setPreviewNonce((prev) => prev + 1);
+      pushToast('Preview refreshed');
+    });
     return () => {
       unsubscribeSave();
       unsubscribeFormat();
+      unsubscribeRun();
     };
   }, [activeProject, pushToast, upsertProject]);
 
@@ -173,6 +188,10 @@ function App() {
         event.preventDefault();
         editorRef.current?.toggleComment();
       }
+      if (event.ctrlKey && event.key.toLowerCase() === 'p') {
+        event.preventDefault();
+        setIsPaletteOpen(true);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -181,33 +200,24 @@ function App() {
   const setFile = useCallback(
     (lang: Language, value: string) => {
       if (!activeProject) return;
-      const next: Project = {
-        ...activeProject,
-        files: { ...activeProject.files, [lang]: value },
-      };
-      upsertProject(next);
+      upsertProject({ ...activeProject, files: { ...activeProject.files, [lang]: value } });
     },
     [activeProject, upsertProject],
   );
 
-  const activeCode = useMemo(() => {
-    if (!activeProject) return '';
-    return activeProject.files[activeLanguage];
-  }, [activeLanguage, activeProject]);
+  const activeCode = useMemo(() => (activeProject ? activeProject.files[activeLanguage] : ''), [activeLanguage, activeProject]);
 
   const onFileImport = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file || !activeProject) return;
-    const files = file.name.endsWith('.zip')
-      ? await importZip(file, activeProject.files)
-      : await importHtml(file, activeProject.files);
+    const files = file.name.endsWith('.zip') ? await importZip(file, activeProject.files) : await importHtml(file, activeProject.files);
     upsertProject({ ...activeProject, files, updatedAt: Date.now() });
     pushToast('Project imported');
   };
 
   const shareUrl = useMemo(() => {
     if (!activeProject) return '';
-    return btoa(unescape(encodeURIComponent(JSON.stringify(activeProject.files))));
+    return btoa(encodeURIComponent(JSON.stringify(activeProject.files)));
   }, [activeProject]);
 
   const createFromTemplate = () => {
@@ -239,55 +249,82 @@ function App() {
     pushToast('Restored snapshot');
   };
 
+  const commands: CommandItem[] = [
+    { id: 'save', label: 'Save Project', onExecute: () => appBus.emit('save', undefined) },
+    { id: 'run', label: 'Run Preview', onExecute: () => appBus.emit('run', undefined) },
+    { id: 'toggle-zen', label: isZenMode ? 'Disable Zen Mode' : 'Enable Zen Mode', onExecute: () => setIsZenMode((value) => !value) },
+    { id: 'layout-side', label: 'Layout: Side by Side', onExecute: () => setLayout('side-by-side') },
+    { id: 'layout-preview', label: 'Layout: Preview Only', onExecute: () => setLayout('preview-only') },
+    { id: 'new-template', label: 'Create Project from Selected Template', onExecute: createFromTemplate },
+  ];
+
   if (!activeProject) return null;
 
   return (
     <div className="flex h-full flex-col bg-bg text-slate-100">
-      <header className="flex flex-wrap items-center gap-2 border-b border-slate-700 bg-panel px-3 py-2 text-sm">
-        <h1 className="mr-3 font-semibold tracking-wide text-accent">DML Editor</h1>
-        <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setUseTailwind((v) => !v)}>Tailwind</button>
-        <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setUseTs((v) => !v)}>TypeScript</button>
-        <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setWordWrap((v) => !v)}>Word Wrap</button>
-        <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setMinimap((v) => !v)}>Minimap</button>
-        <select className="rounded bg-slate-800 px-2 py-1" value={layout} onChange={(e) => setLayout(e.target.value as LayoutMode)}>
-          <option value="side-by-side">Side</option>
-          <option value="top-bottom">Top Bottom</option>
-          <option value="editor-only">Editor</option>
-          <option value="preview-only">Preview</option>
-        </select>
-        <button className="rounded bg-slate-800 px-2 py-1" onClick={() => exportSingleHtml(activeProject.files)}>Export HTML</button>
-        <button className="rounded bg-slate-800 px-2 py-1" onClick={() => void exportZip(activeProject.files)}>Export ZIP</button>
-        <label className="rounded bg-slate-800 px-2 py-1">
-          Import
-          <input type="file" className="hidden" onChange={onFileImport} accept=".html,.zip" />
-        </label>
-        <select className="rounded bg-slate-800 px-2 py-1" value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)}>
-          {templateLibrary.map((template) => (
-            <option key={template.id} value={template.id}>{template.name}</option>
-          ))}
-        </select>
-        <button className="rounded bg-cyan-700 px-2 py-1" onClick={createFromTemplate}>New from Template</button>
-        {canInstall ? <button className="rounded bg-cyan-700 px-2 py-1" onClick={() => void install()}>Install</button> : null}
-        <button className="rounded bg-slate-800 px-2 py-1" onClick={() => navigator.clipboard.writeText(`${location.origin}?share=${shareUrl}`)}>Copy Share URL</button>
-      </header>
+      {!isZenMode ? (
+        <header className="flex flex-wrap items-center gap-2 border-b border-slate-700 bg-panel px-3 py-2 text-sm">
+          <h1 className="mr-3 font-semibold tracking-wide text-accent">DML Editor</h1>
+          <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setUseTailwind((v) => !v)}>Tailwind</button>
+          <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setUseTs((v) => !v)}>TypeScript</button>
+          <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setWordWrap((v) => !v)}>Word Wrap</button>
+          <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setMinimap((v) => !v)}>Minimap</button>
+          <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setIsZenMode((value) => !value)}>Zen</button>
+          <select className="rounded bg-slate-800 px-2 py-1" value={fontFamily} onChange={(event) => setFontFamily(event.target.value as (typeof fontOptions)[number])}>
+            {fontOptions.map((font) => (
+              <option key={font} value={font}>{font.split(',')[0]}</option>
+            ))}
+          </select>
+          <input
+            className="w-20 rounded bg-slate-800 px-2 py-1"
+            type="number"
+            min={12}
+            max={24}
+            value={fontSize}
+            onChange={(event) => setFontSize(Math.max(12, Math.min(24, Number(event.target.value) || 14)))}
+          />
+          <select className="rounded bg-slate-800 px-2 py-1" value={layout} onChange={(e) => setLayout(e.target.value as LayoutMode)}>
+            <option value="side-by-side">Side</option>
+            <option value="top-bottom">Top Bottom</option>
+            <option value="editor-only">Editor</option>
+            <option value="preview-only">Preview</option>
+          </select>
+          <button className="rounded bg-slate-800 px-2 py-1" onClick={() => exportSingleHtml(activeProject.files)}>Export HTML</button>
+          <button className="rounded bg-slate-800 px-2 py-1" onClick={() => void exportZip(activeProject.files)}>Export ZIP</button>
+          <label className="rounded bg-slate-800 px-2 py-1">
+            Import
+            <input type="file" className="hidden" onChange={onFileImport} accept=".html,.zip" />
+          </label>
+          <select className="rounded bg-slate-800 px-2 py-1" value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)}>
+            {templateLibrary.map((template) => (
+              <option key={template.id} value={template.id}>{template.name}</option>
+            ))}
+          </select>
+          <button className="rounded bg-cyan-700 px-2 py-1" onClick={createFromTemplate}>New from Template</button>
+          {canInstall ? <button className="rounded bg-cyan-700 px-2 py-1" onClick={() => void install()}>Install</button> : null}
+          <button className="rounded bg-slate-800 px-2 py-1" onClick={() => navigator.clipboard.writeText(`${location.origin}?share=${shareUrl}`)}>Copy Share URL</button>
+        </header>
+      ) : null}
 
-      <div className="flex items-center gap-2 border-b border-slate-700 bg-slate-900 px-3 py-2">
-        {projects.map((project) => (
-          <button
-            key={project.id}
-            className={`rounded px-3 py-1 text-xs ${project.id === activeProject.id ? 'bg-cyan-700 text-white' : 'bg-slate-800 text-slate-300'}`}
-            onClick={() => setActiveProjectId(project.id)}
-          >
-            {project.name}
-          </button>
-        ))}
-        <button className="ml-auto rounded bg-slate-800 px-2 py-1 text-xs" onClick={() => void removeActiveProject()}>Close Active</button>
-      </div>
+      {!isZenMode ? (
+        <div className="flex items-center gap-2 border-b border-slate-700 bg-slate-900 px-3 py-2">
+          {projects.map((project) => (
+            <button
+              key={project.id}
+              className={`rounded px-3 py-1 text-xs ${project.id === activeProject.id ? 'bg-cyan-700 text-white' : 'bg-slate-800 text-slate-300'}`}
+              onClick={() => setActiveProjectId(project.id)}
+            >
+              {project.name}
+            </button>
+          ))}
+          <button className="ml-auto rounded bg-slate-800 px-2 py-1 text-xs" onClick={() => void removeActiveProject()}>Close Active</button>
+        </div>
+      ) : null}
 
       <motion.main className={`grid flex-1 gap-2 p-2 ${layoutClass[layout]}`} ref={containerRef}>
         {layout !== 'preview-only' ? (
           <section className="flex min-h-0 flex-col rounded border border-slate-700">
-            <EditorTabs active={activeLanguage} onSelect={setActiveLanguage} tsEnabled={useTs} />
+            {!isZenMode ? <EditorTabs active={activeLanguage} onSelect={setActiveLanguage} tsEnabled={useTs} /> : null}
             <div className="min-h-0 flex-1">
               <MonacoEditorPane
                 ref={editorRef}
@@ -296,6 +333,8 @@ function App() {
                 onChange={(value) => setFile(activeLanguage, value)}
                 wordWrap={wordWrap}
                 minimap={minimap}
+                fontSize={fontSize}
+                fontFamily={fontFamily}
               />
             </div>
           </section>
@@ -303,42 +342,54 @@ function App() {
 
         {layout !== 'editor-only' ? (
           <section className="min-h-0 rounded border border-slate-700 bg-panel p-2">
-            <PreviewPane files={activeProject.files} useTailwind={useTailwind} useTs={useTs} />
+            <PreviewPane key={previewNonce} files={activeProject.files} useTailwind={useTailwind} useTs={useTs} />
           </section>
         ) : null}
       </motion.main>
 
-      <div className="flex flex-wrap items-center gap-2 border-t border-slate-700 bg-panel px-3 py-1 text-xs text-slate-300">
-        <span>Versions: {entries.length}</span>
-        <span>Split: {split}%</span>
-        <select className="rounded bg-slate-800 px-2 py-1" value={restoreHistoryId} onChange={(event) => setRestoreHistoryId(event.target.value)}>
-          <option value="">Select snapshot</option>
-          {entries.map((entry) => (
-            <option key={entry.id} value={entry.id}>{new Date(entry.createdAt).toLocaleString()}</option>
-          ))}
-        </select>
-        <button className="rounded bg-slate-800 px-2 py-1" onClick={() => void restoreHistory()}>Restore</button>
-      </div>
-      <div
-        className="h-1 cursor-row-resize bg-slate-700"
-        onMouseDown={(event) => {
-          const startY = event.clientY;
-          const start = split;
-          const onMove = (move: MouseEvent) => {
-            const delta = ((move.clientY - startY) / window.innerHeight) * 100;
-            setSplit(Math.max(20, Math.min(80, start + delta)));
-          };
-          const onUp = () => {
-            window.removeEventListener('mousemove', onMove);
-            window.removeEventListener('mouseup', onUp);
-          };
-          window.addEventListener('mousemove', onMove);
-          window.addEventListener('mouseup', onUp);
-        }}
+      {!isZenMode ? (
+        <>
+          <div className="flex flex-wrap items-center gap-2 border-t border-slate-700 bg-panel px-3 py-1 text-xs text-slate-300">
+            <span>Versions: {entries.length}</span>
+            <span>Split: {split}%</span>
+            <button className="rounded bg-slate-800 px-2 py-1" onClick={() => setIsPaletteOpen(true)}>Command Palette</button>
+            <select className="rounded bg-slate-800 px-2 py-1" value={restoreHistoryId} onChange={(event) => setRestoreHistoryId(event.target.value)}>
+              <option value="">Select snapshot</option>
+              {entries.map((entry) => (
+                <option key={entry.id} value={entry.id}>{new Date(entry.createdAt).toLocaleString()}</option>
+              ))}
+            </select>
+            <button className="rounded bg-slate-800 px-2 py-1" onClick={() => void restoreHistory()}>Restore</button>
+          </div>
+          <div
+            className="h-1 cursor-row-resize bg-slate-700"
+            onMouseDown={(event) => {
+              const startY = event.clientY;
+              const start = split;
+              const onMove = (move: MouseEvent) => {
+                const delta = ((move.clientY - startY) / window.innerHeight) * 100;
+                setSplit(Math.max(20, Math.min(80, start + delta)));
+              };
+              const onUp = () => {
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+              };
+              window.addEventListener('mousemove', onMove);
+              window.addEventListener('mouseup', onUp);
+            }}
+          />
+          <div style={{ height: `${100 - split}%` }}>
+            <ConsolePanel logs={consoleLogs} onClear={() => setConsoleLogs([])} />
+          </div>
+        </>
+      ) : null}
+
+      <FloatingActions
+        onRun={() => appBus.emit('run', undefined)}
+        onSave={() => appBus.emit('save', undefined)}
+        onSettings={() => setIsPaletteOpen(true)}
       />
-      <div style={{ height: `${100 - split}%` }}>
-        <ConsolePanel logs={consoleLogs} onClear={() => setConsoleLogs([])} />
-      </div>
+      <CommandPalette isOpen={isPaletteOpen} onClose={() => setIsPaletteOpen(false)} commands={commands} />
       <ToastCenter toasts={toasts} />
     </div>
   );
